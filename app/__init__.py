@@ -1,25 +1,51 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_pymongo import PyMongo
-from flask_login import LoginManager
+from flask_bcrypt import Bcrypt
+from flask_cors import CORS
 from app.config import Config
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
 mongo = PyMongo(app)
-login_manager = LoginManager(app)
-login_manager.login_view = 'login'  # This still points to the login route
+bcrypt = Bcrypt(app)
 
-# Return JSON for unauthorized access instead of redirecting
-@login_manager.unauthorized_handler
-def unauthorized():
-    return jsonify({'message': 'Unauthorized - Please log in'}), 401
+CORS(app, supports_credentials=True, resources={
+    r"/*": {
+        "origins": "http://localhost:4200",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
-from app import routes, models
+@app.route('/')
+def home():
+    return 'Welcome to Asksphere!'
 
-@login_manager.user_loader
-def load_user(user_id):
-    user_data = mongo.db.users.find_one({'_id': user_id})
-    if user_data:
-        return models.User(**user_data)
-    return None
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if mongo.db.users.find_one({'username': data['username']}):
+        return jsonify({'message': 'User already exists'}), 400
+    
+    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    user_data = {'username': data['username'], 'password': hashed_password}
+    result = mongo.db.users.insert_one(user_data)
+    return jsonify({
+        'message': 'User registered successfully',
+        'user': {'id': str(result.inserted_id), 'username': data['username']}
+    }), 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user_data = mongo.db.users.find_one({'username': data['username']})
+    if user_data and bcrypt.check_password_hash(user_data['password'], data['password']):
+        return jsonify({
+            'message': 'Logged in successfully',
+            'user': {'id': str(user_data['_id']), 'username': user_data['username']}
+        }), 200
+    return jsonify({'message': 'Invalid credentials'}), 401
+
+if __name__ == '__main__':
+    app.run(debug=True)
